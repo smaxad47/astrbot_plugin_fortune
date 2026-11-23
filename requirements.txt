@@ -1,0 +1,2 @@
+# Pillow 已是 AstrBot 核心依赖（pyproject: pillow>=11.2.1），此处显式声明以保证可用。
+pillow>=11.2.1

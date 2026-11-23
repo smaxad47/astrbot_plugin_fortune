@@ -1,20 +1,24 @@
-"""今日运势（抽签）AstrBot 插件 —— 精简版。
+"""今日运势（抽签）AstrBot 插件 —— 本地渲染 · 完全独立版。
 
 移植自 nonebot_plugin_fortune (https://github.com/MinatoAquaCrews/nonebot_plugin_fortune)
 原作者: KafCoppelia <k740677208@gmail.com>，MIT License。
 
-设计目标（精简版）：
-- 依赖极少：仅用 AstrBot 内置的文转图 `html_render`，不依赖 Pillow / httpx。
-- 指令极少：只保留 `抽签`（一般抽签）与 `主题列表`；可选 `抽签 <主题>` 指定主题。
-- 不做任何“设置/重置群主题”的功能：默认全部主题启用，随机抽签。
+设计目标（v0.5.0）：
+- **完全本地化**：不再使用 AstrBot 的 `html_render`（其默认走公共 t2i 接口），
+  而是直接用 Pillow 在本地绘制 480x480 运势卡，运行期不访问任何公共 API / 网络。
+- **自带资源**：主题立绘、文案、字体（Mamelon.otf / sakura.ttf）全部随插件打包，
+  仅依赖 AstrBot 核心已内置的 Pillow（pyproject: pillow>=11.2.1）。
+- **指令精简**：只保留 `抽签`（一般抽签）、可选 `抽签 <主题>`、`主题列表`。
 - 每群每人每天限抽 1 次，跨天自动刷新（基于日期字符串判断）。
 """
 
 from __future__ import annotations
 
-import base64
+import asyncio
 import json
+import math
 import random
+import time
 from datetime import date
 from pathlib import Path
 
@@ -22,7 +26,11 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-__fortune_version__ = "v0.4.12"
+# Pillow 是 AstrBot 核心依赖（pyproject 中声明 pillow>=11.2.1），这里直接本地出图，
+# 不经过任何在线文转图（t2i）服务，也不依赖公共 API。
+from PIL import Image, ImageDraw, ImageFont
+
+__fortune_version__ = "v0.5.0"
 
 """
     抽签主题对应表：键为资源文件夹名，值为该主题的别名列表（第一个用于展示）。
@@ -53,89 +61,179 @@ FortuneThemesDict: dict[str, list[str]] = {
     "warship_girls_r": ["战舰少女R", "舰r", "舰R", "wsgr", "WSGR", "战舰少女r"],
 }
 
-# html_render 的 HTML 模板。
-# 主题底图（resource/img/<主题>/*，480x480）本身自带左侧"签面框"与顶部标题框，
-# 因此只把标题写进顶部框、正文以【竖排、从右向左、居中】写进签面框即可，
-# 无需叠加白色卡片——还原原插件用 Pillow 绘制的版式。
-#
-# 版式按「签面框」定位：_DEFAULT_BOX = (left, top, right, bottom)，
-# 各主题底图的签面位置基本一致，个别主题在 _THEME_BOX 中覆盖即可。
-_TMPL = """
-<div style="
-    width:480px;height:480px;position:relative;
-    background-image:url('{{ bg }}');
-    background-size:cover;background-position:center;
-    font-family:'Mamelon','Sakura','PingFang SC','Microsoft YaHei',sans-serif;
-    overflow:hidden;">
-  <div style="
-      position:absolute;left:{{ title_x }}px;top:{{ title_y }}px;
-      width:{{ title_w }}px;height:{{ title_h }}px;
-      display:flex;align-items:center;justify-content:center;
-      color:{{ title_color }};font-size:{{ title_size }}px;font-weight:bold;
-      letter-spacing:2px;text-shadow:0 0 5px rgba(255,255,255,.95),
-      0 0 2px rgba(255,255,255,.95);">{{ title }}</div>
-  <div style="
-      position:absolute;left:{{ text_x }}px;top:{{ text_y }}px;
-      width:{{ text_w }}px;height:{{ text_h }}px;
-      display:flex;flex-direction:row;justify-content:center;
-      align-items:flex-start;">
-    <div style="
-        writing-mode:vertical-rl;text-orientation:upright;
-        letter-spacing:{{ text_spacing }}px;
-        color:{{ text_color }};font-size:{{ text_size }}px;
-        line-height:{{ text_lineheight }}px;">{{ text }}</div>
-  </div>
-</div>
-"""
+# ---------------------------------------------------------------------- #
+# 本地出图（Pillow）配置
+# ---------------------------------------------------------------------- #
+_FONT_DIR = Path(__file__).parent / "resource" / "font"
+TITLE_FONT_FILE = _FONT_DIR / "Mamelon.otf"
+TEXT_FONT_FILE = _FONT_DIR / "sakura.ttf"
 
-# 默认签面框 (left, top, right, bottom)，适用于多数 480x480 主题。
+# 主题底图（resource/img/<主题>/*，均为 480x480）自带左侧「签面框」与顶部标题框。
+# 版式按「签面框」定位：_DEFAULT_BOX = (left, top, right, bottom)，
+# 各主题签面位置基本一致，个别主题在 _THEME_BOX 中覆盖即可。
 _DEFAULT_BOX = (45, 61, 221, 452)
 
 # 个别主题签面框不同则在此覆盖 (left, top, right, bottom)。
 _THEME_BOX: dict[str, tuple[int, int, int, int]] = {
     "summer_pockets": (35, 110, 262, 455),  # 黄色描边框，偏宽、偏下、无白底
-    "warship_girls_r": (52, 175, 192, 447),  # 灰白面板，顶部有预印「今日运势」红框
 }
 
+# 少数主题版式差异较大，直接给出完整布局（标题/正文坐标）。
+_LAYOUT_OVERRIDES: dict[str, dict] = {
+    "warship_girls_r": {
+        "center_x": 143,
+        "title_y": 110,       # 顶部米色标题条
+        "text_top": 205,      # 「今日运势」标签之下
+        "text_bottom": 400,
+        "max_chars": 6,
+    },
+}
 
-def _layout_from_box(box: tuple[int, int, int, int]) -> dict:
-    """由签面框推导标题框与正文框的绝对坐标（标题/正文均水平居中于签面）。"""
-    left, top, right, bottom = box
-    width = right - left
+_TITLE_SIZE = 30
+_TEXT_SIZE = 24
+_TEXT_GAP = 6          # 竖排时字与字之间的垂直间距
+_COL_GAP = 16          # 两列之间的水平间距
+_MAX_CHARS = 9         # 每列最多字数（默认版式）
+_INK_THRESHOLD = 147   # 背景亮度阈值：>= 用深色字，否则用浅色字
+_PUNCT = set("，。！？、；：…—,.!?;:")
+
+# 字体缓存（避免每次渲染都重新加载 20MB 字体）。
+_FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+
+
+def _load_font(path: Path, size: int) -> ImageFont.FreeTypeFont:
+    key = (str(path), size)
+    if key not in _FONT_CACHE:
+        _FONT_CACHE[key] = ImageFont.truetype(str(path), size)
+    return _FONT_CACHE[key]
+
+
+def _mean_luma(img: Image.Image, box: tuple[int, int, int, int]) -> float:
+    """返回指定区域的平均亮度（0~255），用于自适应文字颜色。"""
+    region = img.crop(box).convert("L")
+    hist = region.histogram()
+    total = sum(hist)
+    if not total:
+        return 255.0
+    return sum(i * c for i, c in enumerate(hist)) / total
+
+
+def _split_columns(text: str, max_chars: int) -> list[str]:
+    """把文案按每列最多 max_chars 字切成若干列（尽量均分，避免标点掉到列首）。"""
+    if not text:
+        return [""]
+    max_chars = max(1, max_chars)
+    n = max(1, math.ceil(len(text) / max_chars))
+    per = math.ceil(len(text) / n)
+    cols: list[str] = []
+    i = 0
+    while i < len(text):
+        end = min(len(text), i + per)
+        # 若切分点落在标点上，把标点并入当前列，避免下一列以标点开头
+        while end < len(text) and text[end] in _PUNCT:
+            end += 1
+        cols.append(text[i:end])
+        i = end
+    return cols
+
+
+def _compute_layout(theme: str) -> dict:
+    """由主题名推导标题与正文的绘制布局。"""
+    if theme in _LAYOUT_OVERRIDES:
+        return dict(_LAYOUT_OVERRIDES[theme])
+
+    left, top, right, bottom = _THEME_BOX.get(theme, _DEFAULT_BOX)
     cx = (left + right) // 2
-
-    # 标题：签面内顶部自带的标题框（约 top+12 起，高 48），水平居中
-    title_w = int(width * 0.9)
-    title_h = 48
-    title_x = cx - title_w // 2
-    title_y = top + 12
-
-    # 正文：从「运势」字样及其下方波浪线之后开始（约 top+105），到框底留白
-    text_w = int(width * 0.9)
-    text_x = cx - text_w // 2
-    text_y = top + 105
-    text_h = bottom - text_y - 8
-
     return {
-        "title_x": title_x,
-        "title_y": title_y,
-        "title_w": title_w,
-        "title_h": title_h,
-        "title_size": 30,
-        "title_color": "#333333",
-        "text_x": text_x,
-        "text_y": text_y,
-        "text_w": text_w,
-        "text_h": text_h,
-        "text_size": 23,
-        "text_lineheight": 27,
-        "text_spacing": 9,
-        "text_color": "#3a3a3a",
+        "center_x": cx,
+        # 标题：签面顶部自带的标题框（约 top+12 起，高 48），垂直中心 top+36
+        "title_y": top + 36,
+        # 正文：「运势」字样及其下方波浪线之后开始，到框底留白
+        "text_top": top + 105,
+        "text_bottom": bottom - 8,
+        "max_chars": _MAX_CHARS,
     }
 
 
-# 兼容旧命名的默认布局（dc4 等常见主题）。
-_DEFAULT_LAYOUT = _layout_from_box(_DEFAULT_BOX)
+def _draw_card(
+    base_path: Path, title: str, text: str, theme: str, out_path: Path
+) -> Path:
+    """在本地用 Pillow 绘制一张运势卡并保存到 out_path。"""
+    img = Image.open(base_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    layout = _compute_layout(theme)
+    cx = layout["center_x"]
+
+    # ---------- 标题（写进顶部标题框，水平居中） ----------
+    title_font = _load_font(TITLE_FONT_FILE, _TITLE_SIZE)
+    title_w = draw.textlength(title, font=title_font)
+    band = (
+        int(cx - title_w / 2),
+        layout["title_y"] - 18,
+        int(cx + title_w / 2) + 1,
+        layout["title_y"] + 18,
+    )
+    band_luma = _mean_luma(img, band)
+    if band_luma >= _INK_THRESHOLD:
+        title_fill, title_stroke = (45, 45, 45), (255, 255, 255)
+    else:
+        title_fill, title_stroke = (252, 252, 252), (35, 35, 35)
+    draw.text(
+        (cx, layout["title_y"]),
+        title,
+        font=title_font,
+        fill=title_fill,
+        anchor="mm",
+        stroke_width=1,
+        stroke_fill=title_stroke,
+    )
+
+    # ---------- 正文（竖排、从右向左、居中） ----------
+    text_top = layout["text_top"]
+    text_bottom = layout["text_bottom"]
+    box_h = text_bottom - text_top
+    cell = _TEXT_SIZE + _TEXT_GAP
+    text_font = _load_font(TEXT_FONT_FILE, _TEXT_SIZE)
+
+    cols = _split_columns(text, layout.get("max_chars", _MAX_CHARS))
+    n = len(cols)
+    pitch = _TEXT_SIZE + _COL_GAP
+    total_w = n * pitch
+
+    body_band = (
+        int(cx - total_w / 2),
+        text_top,
+        int(cx + total_w / 2) + 1,
+        text_bottom,
+    )
+    body_luma = _mean_luma(img, body_band)
+    if body_luma >= _INK_THRESHOLD:
+        body_fill, body_stroke, body_sw = (48, 48, 48), None, 0
+    else:
+        body_fill, body_stroke, body_sw = (248, 248, 248), (25, 25, 25), 1
+
+    for ci, col in enumerate(cols):
+        # 第一列在最右（竖排从右向左阅读）
+        col_left = cx + total_w / 2 - (ci + 1) * pitch
+        xc = col_left + pitch / 2
+        col_h = len(col) * cell
+        start_y = text_top + (box_h - col_h) / 2
+        for j, ch in enumerate(col):
+            if ch == " ":
+                continue
+            yc = start_y + (j + 0.5) * cell
+            draw.text(
+                (xc, yc),
+                ch,
+                font=text_font,
+                fill=body_fill,
+                anchor="mm",
+                stroke_width=body_sw,
+                stroke_fill=body_stroke,
+            )
+
+    img.save(out_path)
+    return out_path
 
 
 def _default_data_dir() -> Path:
@@ -151,7 +249,7 @@ def _default_data_dir() -> Path:
 @register(
     "astrbot_plugin_fortune",
     "KafCoppelia (nonebot 原作者) / AstrBot 移植",
-    "抽签！占卜你的今日运势🙏（精简版，html_render 出图）",
+    "抽签！占卜你的今日运势🙏（本地 Pillow 出图，完全独立）",
     __fortune_version__,
     "https://github.com/MinatoAquaCrews/nonebot_plugin_fortune",
 )
@@ -165,9 +263,12 @@ class FortunePlugin(Star):
         self.data_dir = _default_data_dir()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.data_file = self.data_dir / "fortune_data.json"
+        self.out_dir = self.data_dir / "out"
+        self.out_dir.mkdir(parents=True, exist_ok=True)
         if not self.data_file.exists():
             self._dump_json(self.data_file, {})
 
+        self._copywriting: list[dict] = self._load_copywriting()
         self._check_resources()
 
     # ------------------------------------------------------------------ #
@@ -178,6 +279,18 @@ class FortunePlugin(Star):
             logger.error(f"运势图片资源缺失: {self.img_dir}")
         if not self.copywriting_file.exists():
             logger.error(f"运势文案资源缺失: {self.copywriting_file}")
+        if not TITLE_FONT_FILE.exists():
+            logger.error(f"标题字体资源缺失: {TITLE_FONT_FILE}")
+        if not TEXT_FONT_FILE.exists():
+            logger.error(f"正文字体资源缺失: {TEXT_FONT_FILE}")
+
+    def _load_copywriting(self) -> list[dict]:
+        try:
+            with open(self.copywriting_file, "r", encoding="utf-8") as f:
+                return json.load(f).get("copywriting", [])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"读取运势文案失败: {e}")
+            return []
 
     @staticmethod
     def _dump_json(path: Path, data) -> None:
@@ -204,13 +317,15 @@ class FortunePlugin(Star):
     # ------------------------------------------------------------------ #
     # 主题与抽签
     # ------------------------------------------------------------------ #
-    def _random_theme(self) -> str:
-        themes = [
+    def _available_themes(self) -> list[str]:
+        return [
             t
             for t in FortuneThemesDict
             if t != "random" and (self.img_dir / t).is_dir()
         ]
-        return random.choice(themes)
+
+    def _random_theme(self) -> str:
+        return random.choice(self._available_themes())
 
     def _resolve_theme(self, arg: str) -> tuple[str | None, str | None]:
         """根据用户输入解析主题，返回 (主题目录名, 错误信息)。
@@ -233,53 +348,57 @@ class FortunePlugin(Star):
         return random.choice(images)
 
     def _get_copywriting(self) -> tuple[str, str]:
-        """随机取一条运势。
+        """随机取一条运势（标题 + 文案）。
 
-        签面可容纳约两列、每列 9 字左右，过长的文案会顶出签面，
-        因此优先挑选长度适中（<= 13 字）的文案；兜底再放宽到 16 字。
+        签面宽度有限，过长文案会顶出签面，因此优先选择 ≤13 字的文案；
+        若该分类没有则退而求其次选 ≤16 字，保证实际绘制的文案不会过长。
         """
-        with open(self.copywriting_file, "r", encoding="utf-8") as f:
-            content = json.load(f).get("copywriting")
-        # 优先 <=13 字
-        for _ in range(16):
-            luck = random.choice(content)
-            text = random.choice(luck.get("content"))
-            if len(text) <= 13:
-                return luck.get("good-luck"), text
-        # 放宽到 <=16
-        for _ in range(16):
-            luck = random.choice(content)
-            text = random.choice(luck.get("content"))
-            if len(text) <= 16:
-                return luck.get("good-luck"), text
-        # 兜底
-        return luck.get("good-luck"), text
+        if not self._copywriting:
+            return "今日运势", "运势不错"
 
-    @staticmethod
-    def _img_data_uri(path: Path) -> str:
-        """把本地图片转成 data URI，供 HTML 模板内联使用（无需额外依赖）。"""
-        ext = path.suffix.lower().lstrip(".")
-        mime = "jpeg" if ext in ("jpg", "jpeg") else ext
-        b64 = base64.b64encode(path.read_bytes()).decode()
-        return f"data:image/{mime};base64,{b64}"
+        # 只从“至少有一条 ≤16 字文案”的分类里挑，避免出现超长文案
+        valid = [
+            luck
+            for luck in self._copywriting
+            if any(len(t) <= 16 for t in luck.get("content", []))
+        ]
+        luck = random.choice(valid or self._copywriting)
+        texts = luck.get("content", []) or ["运势不错"]
+        short = [t for t in texts if len(t) <= 13]
+        mid = [t for t in texts if len(t) <= 16]
+        pool = short or mid or texts
+        text = random.choice(pool)
+        return luck.get("good-luck", "今日运势"), text
+
+    # ------------------------------------------------------------------ #
+    # 本地渲染
+    # ------------------------------------------------------------------ #
+    def _render_sync(self, theme: str) -> str:
+        """同步渲染（在线程池中执行，避免阻塞事件循环）。"""
+        title, text = self._get_copywriting()
+        base = self._pick_image(theme)
+        out_name = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}.png"
+        out_path = self.out_dir / out_name
+        _draw_card(base, title, text, theme, out_path)
+        self._cleanup_out_dir()
+        return str(out_path)
+
+    def _cleanup_out_dir(self, max_age_seconds: int = 86400) -> None:
+        """清理 1 天前的临时图片，避免占用过多磁盘。"""
+        now = time.time()
+        try:
+            for p in self.out_dir.iterdir():
+                if p.is_file() and now - p.stat().st_mtime > max_age_seconds:
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
     async def _render_card(self, event: AstrMessageEvent, theme: str) -> str:
-        title, text = self._get_copywriting()
-        box = _THEME_BOX.get(theme) or _DEFAULT_BOX
-        # 占位用的 (0,0,0,0) 视为无效 -> 回退默认框
-        if box == (0, 0, 0, 0):
-            box = _DEFAULT_BOX
-        layout = _layout_from_box(box)
-        data = {
-            "bg": self._img_data_uri(self._pick_image(theme)),
-            "title": title,
-            "text": text,
-            **layout,
-        }
-        # return_url=False -> 返回本地文件路径，可直接用于 image_result
-        return await self.html_render(
-            _TMPL, data, return_url=False, umo=event.unified_msg_origin
-        )
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._render_sync, theme)
 
     # ------------------------------------------------------------------ #
     # 指令
@@ -329,7 +448,7 @@ class FortunePlugin(Star):
         yield event.plain_result(msg)
 
     async def terminate(self) -> None:
-        """插件卸载时调用（本精简版无后台任务）。"""
+        """插件卸载时调用（本插件无后台任务）。"""
 
 
 # ---------------------------------------------------------------------- #

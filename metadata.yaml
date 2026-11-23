@@ -1,6 +1,6 @@
 name: astrbot_plugin_fortune
 display_name: 今日运势（抽签）
-desc: 移植自 nonebot_plugin_fortune 的今日运势/抽签插件。精简版：使用 AstrBot 内置 html_render 出图，无需 Pillow/httpx；仅保留「抽签」与「主题列表」指令，默认全部主题启用随机抽签，每群每人每天限一次。
-version: v0.4.12
+desc: 移植自 nonebot_plugin_fortune 的今日运势/抽签插件。仅保留「抽签」与「主题列表」指令，默认全部主题启用随机抽签，每群每人每天限一次。
+version: v0.5.0
 author: smaxad47
 repo: https://github.com/smaxad47/astrbot_plugin_fortune
