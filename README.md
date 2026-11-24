@@ -27,10 +27,9 @@
    python scripts/pack_resources.py
    # -> dist/fortune_resource.zip（结构：img/ + fortune/ + font/）
    ```
-2. **上传到 GitHub Release**：在仓库新建一个 Release/Tag，把 `dist/fortune_resource.zip` 作为附件上传，
-   复制该附件的**下载直链**（形如 `https://github.com/<owner>/<repo>/releases/download/<tag>/fortune_resource.zip`）。
-3. **填写地址**：打开 WebUI →「插件」→ 今日运势 →「插件配置」，把直链填到 `resource_url`
-   （也可以留空，稍后在「资源管理」页面的输入框里填）。
+2. **上传到 GitHub Release**：在仓库新建一个 Release/Tag，把 `dist/fortune_resource.zip` 作为附件上传。
+   > 代码里已把默认地址**写死**为 `.../releases/download/0.4.12/fortune_resource.zip`，只要 Release 的 tag 用 `0.4.12` 即可直接使用；否则在下一步覆盖。
+3. **（可选）填写地址**：默认无需配置；如需使用其它地址，打开 WebUI →「插件」→ 今日运势 →「插件配置」，把直链填到 `resource_url`。
 4. **下载资源**：打开 WebUI →「插件」→ 今日运势 →「资源管理」页面，点击「下载 / 更新资源」，等待进度完成。
    - 或把配置项 `auto_download` 设为 `true`，首次抽签时自动后台下载。
 5. 完成后发送 `/抽签` 即可。

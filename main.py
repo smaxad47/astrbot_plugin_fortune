@@ -47,9 +47,8 @@ from PIL import Image, ImageDraw, ImageFont
 __fortune_version__ = "v0.5.1"
 PLUGIN_NAME = "astrbot_plugin_fortune"
 
-# 资源包默认下载地址。上传到 GitHub Release 后，把 zip 的直链填在这里
-# （也可以在插件配置 resource_url 里覆盖，或在该值留空由 WebUI 页面里临时填写）。
-RESOURCE_URL = ""
+# 资源包下载地址（已写死为该 Release 附件；仍可在插件配置 resource_url 里覆盖）。
+RESOURCE_URL = "https://github.com/smaxad47/astrbot_plugin_fortune/releases/download/0.4.12/fortune_resource.zip"
 
 """
     抽签主题对应表：键为资源文件夹名，值为该主题的别名列表（第一个用于展示）。
@@ -581,7 +580,6 @@ class FortunePlugin(Star):
         if self._already_drawn(gid, uid) and cached.exists():
             yield event.chain_result(
                 [
-                    _at(event.get_sender_id()),
                     _plain("你今天抽过签了，再给你看一次哦🤗\n"),
                     _image(str(cached)),
                 ]
@@ -601,7 +599,6 @@ class FortunePlugin(Star):
 
         yield event.chain_result(
             [
-                _at(event.get_sender_id()),
                 _plain("✨今日运势✨\n"),
                 _image(img_path),
             ]
@@ -616,12 +613,6 @@ class FortunePlugin(Star):
 # ---------------------------------------------------------------------- #
 # 消息组件小工具（延迟导入）
 # ---------------------------------------------------------------------- #
-def _at(qq: str):
-    import astrbot.api.message_components as Comp
-
-    return Comp.At(qq=qq)
-
-
 def _plain(text: str):
     import astrbot.api.message_components as Comp
 

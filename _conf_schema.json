@@ -2,8 +2,8 @@
   "resource_url": {
     "type": "string",
     "description": "运势资源包下载地址（.zip 直链）",
-    "hint": "把主题立绘/字体/文案打包成 zip 后上传到 GitHub Release，把该 zip 的下载直链填这里；也可在「资源管理」页面里临时填写。",
-    "default": ""
+    "hint": "已默认写死为官方 Release 附件地址；一般无需修改，如需改用其他镜像/地址可在此覆盖。",
+    "default": "https://github.com/smaxad47/astrbot_plugin_fortune/releases/download/0.4.12/fortune_resource.zip"
   },
   "auto_download": {
     "type": "bool",
