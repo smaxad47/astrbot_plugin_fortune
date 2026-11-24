@@ -211,3 +211,6 @@ __pycache__/
 *.pyc
 /data/
 /.dev/
+
+# 移植代码文件夹
+nonebot_plugin_fortune/
