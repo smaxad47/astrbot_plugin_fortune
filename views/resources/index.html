@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>资源管理 · 今日运势</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>今日运势 · 资源管理</h1>
+      <p class="sub">主题立绘 / 字体 / 文案资源管理（下载后保存在 AstrBot 插件数据目录，插件更新不会丢失）</p>
+
+      <section class="card">
+        <div class="row"><span class="label">状态</span><span id="status-badge" class="badge">读取中…</span></div>
+        <div class="row"><span class="label">主题数</span><span id="themes">-</span></div>
+        <div class="row"><span class="label">图片数</span><span id="images">-</span></div>
+        <div class="row"><span class="label">资源目录</span><code id="dir">-</code></div>
+      </section>
+
+      <section class="card">
+        <label class="label" for="url">资源包地址（.zip 直链，可留空使用插件配置）</label>
+        <input id="url" type="text" spellcheck="false"
+               placeholder="https://github.com/<owner>/<repo>/releases/download/<tag>/fortune_resource.zip" />
+        <div class="actions">
+          <button id="download" class="primary">下载 / 更新资源</button>
+          <button id="refresh" class="ghost">刷新状态</button>
+        </div>
+        <div id="progress-wrap" class="progress-wrap hidden">
+          <div class="progress"><div id="bar" class="bar"></div></div>
+          <div id="progress-text" class="progress-text"></div>
+        </div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

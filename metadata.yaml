@@ -1,6 +1,7 @@
 name: astrbot_plugin_fortune
 display_name: 今日运势（抽签）
-desc: 移植自 nonebot_plugin_fortune 的今日运势/抽签插件。保留原插件的 Pillow 渲染方式，仅把 nonebot2 接口换成 AstrBot 接口；只保留「抽签」指令，默认全部主题启用、随机抽签，每群每人每天限一次。
-version: v0.5.0
+desc: 移植自 nonebot_plugin_fortune 的今日运势/抽签插件。保留原插件 Pillow 渲染方式，仅把 nonebot2 接口换成 AstrBot 接口；只保留「抽签」指令，默认全部主题随机。主题立绘/字体/文案资源可打包成 zip 放到 GitHub Release，通过插件 WebUI「资源管理」页面下载，插件仓库只留代码。
+short_desc: 抽签！占卜今日运势（原版渲染，资源可在插件页下载）
+version: v0.5.1
 author: smaxad47
 repo: https://github.com/smaxad47/astrbot_plugin_fortune

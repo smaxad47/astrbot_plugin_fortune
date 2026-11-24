@@ -214,3 +214,10 @@ __pycache__/
 
 # 移植代码文件夹
 nonebot_plugin_fortune/
+/dist/
+
+# 外置的大体积资源（仅本地保留，用于打包发布，不进入插件仓库）
+resource/img/
+resource/font/
+resource/fortune/
+fortune.zip

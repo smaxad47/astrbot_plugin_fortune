@@ -1,0 +1,14 @@
+{
+  "resource_url": {
+    "type": "string",
+    "description": "运势资源包下载地址（.zip 直链）",
+    "hint": "把主题立绘/字体/文案打包成 zip 后上传到 GitHub Release，把该 zip 的下载直链填这里；也可在「资源管理」页面里临时填写。",
+    "default": ""
+  },
+  "auto_download": {
+    "type": "bool",
+    "description": "资源缺失时自动后台下载",
+    "hint": "开启后，首次抽签若发现资源未安装，会在后台自动从 resource_url 下载，完成后再次发送「抽签」即可。",
+    "default": false
+  }
+}
